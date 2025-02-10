@@ -1,1 +1,756 @@
-Welcome to Claude, https://claude.ai/
+
+import pickle
+import pandas as pd
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox,
+    QPushButton, QTableWidget, QTableWidgetItem, QWidget, QScrollArea,
+    QDateEdit, QFileDialog, QGraphicsView, QGraphicsScene, QLineEdit,
+    QComboBox, QListWidget, QListWidgetItem, QProgressBar, QSizePolicy,
+    QStyleFactory, QToolBar
+)
+from PyQt5.QtCore import Qt, QDate, QRect, QSize
+from PyQt5.QtGui import QColor, QBrush, QPalette, QFont, QPainter, QLinearGradient, QPen
+
+# Theme colors dictionary
+THEME_COLORS = {
+    'light': {
+        'background': '#F5F5F7',
+        'card_background': 'white',
+        'text': '#000000',
+        'secondary_text': '#3C3C3C',
+        'border': '#DEDEDE',
+        'search_background': 'rgba(142, 142, 147, 0.12)',
+        'search_text': '#8E8E93',
+        'hover': '#F5F5F5',
+        'table_alternate': '#F9F9F9',
+        'table_header': '#F9F9F9',
+        'progress_background': '#E5E5EA',
+        'progress_chunk': '#007AFF'
+    },
+    'dark': {
+        'background': '#1E1E1E',
+        'card_background': '#2C2C2C',
+        'text': '#FFFFFF',
+        'secondary_text': '#CCCCCC',
+        'border': '#3D3D3D',
+        'search_background': 'rgba(142, 142, 147, 0.2)',
+        'search_text': '#8E8E93',
+        'hover': '#3D3D3D',
+        'table_alternate': '#2C2C2C',
+        'table_header': '#2C2C2C',
+        'progress_background': '#3D3D3D',
+        'progress_chunk': '#0A84FF'
+    }
+}
+
+# Load annotation data
+pkl_file = "/mobileye/algo_REM_05/omersa/playground/CDSEARCH-cat/CD Search_with_gui/Ext/annotations.pkl"
+if not os.path.exists(pkl_file):
+    raise FileNotFoundError(f"Pickle file '{pkl_file}' not found!")
+with open(pkl_file, "rb") as f:
+    all_annotations = pickle.load(f)
+
+# Extract unique tags
+unique_tags = sorted({tag for entry in all_annotations for tag in entry.get("phase_tags", [])})
+
+# Group phases into runs and patches
+events = {}
+for entry in all_annotations:
+    run_name = entry["Run Name"]
+    start_index = entry["start_phase_rsd_index"]
+
+    if run_name not in events:
+        events[run_name] = {"patches": []}
+
+    if not events[run_name]["patches"] or start_index == 0:
+        events[run_name]["patches"].append({"phases": []})
+
+    events[run_name]["patches"][-1]["phases"].append(entry)
+
+
+class ThemeManager:
+    """Manage application theme (light/dark mode)"""
+
+    def __init__(self):
+        self.current_theme = 'light'
+
+    def toggle_theme(self):
+        self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
+        return self.current_theme
+
+    def get_colors(self):
+        return THEME_COLORS[self.current_theme]
+
+
+class ModernSearchBar(QLineEdit):
+    """Enhanced macOS-style search bar with Spotlight-like appearance."""
+
+    def __init__(self, theme_manager, parent=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        self.update_theme()
+
+    def update_theme(self):
+        colors = self.theme_manager.get_colors()
+        self.setStyleSheet(f"""
+            QLineEdit {{
+                border: none;
+                border-radius: 6px;
+                padding: 5px 15px 5px 35px;
+                background: {colors['search_background']};
+                color: {colors['text']};
+                min-height: 28px;
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                background: {colors['search_background']};
+            }}
+            QLineEdit::placeholder {{
+                color: {colors['search_text']};
+            }}
+        """)
+
+        self.search_icon = QLabel(self)
+        self.search_icon.setStyleSheet(f"QLabel {{ color: {colors['search_text']}; }}")
+        self.search_icon.setText("🔍")
+        self.search_icon.setAlignment(Qt.AlignCenter)
+        self.search_icon.move(10, 6)
+
+
+class MacStyleComboBox(QComboBox):
+    """Enhanced macOS-style multi-selection combo box."""
+
+    def __init__(self, items, theme_manager, parent=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self.checked_items = set()
+
+        self.list_widget = QListWidget()
+        self.list_widget.itemClicked.connect(self.toggle_check_state)
+        self.list_widget.itemChanged.connect(self.update_checked_items)
+
+        for item in items:
+            list_item = QListWidgetItem(item)
+            list_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            list_item.setCheckState(Qt.Unchecked)
+            self.list_widget.addItem(list_item)
+
+        self.setModel(self.list_widget.model())
+        self.setView(self.list_widget)
+
+        self.update_theme()
+
+    def update_theme(self):
+        colors = self.theme_manager.get_colors()
+        self.setStyleSheet(f"""
+            QComboBox {{
+                border: 0.5px solid {colors['border']};
+                border-radius: 6px;
+                padding: 5px 30px 5px 10px;
+                background: {colors['card_background']};
+                color: {colors['text']};
+                min-height: 28px;
+                font-size: 13px;
+            }}
+            QComboBox:hover {{
+                border-color: {colors['secondary_text']};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox::down-arrow {{
+                image: none;
+            }}
+            QListView {{
+                border: 0.5px solid {colors['border']};
+                border-radius: 6px;
+                padding: 4px;
+                background: {colors['card_background']};
+                color: {colors['text']};
+                outline: none;
+            }}
+            QListView::item {{
+                padding: 4px;
+                border-radius: 4px;
+            }}
+            QListView::item:selected {{
+                background: {colors['hover']};
+            }}
+            QListView::item:hover {{
+                background: {colors['hover']};
+            }}
+        """)
+
+    def toggle_check_state(self, item):
+        current_state = item.checkState()
+        item.setCheckState(Qt.Unchecked if current_state == Qt.Checked else Qt.Checked)
+
+    def update_checked_items(self, item):
+        if item.checkState() == Qt.Checked:
+            self.checked_items.add(item.text())
+        else:
+            self.checked_items.discard(item.text())
+        self.update_display_text()
+
+    def update_display_text(self):
+        if self.checked_items:
+            self.setEditText(", ".join(sorted(self.checked_items)))
+        else:
+            self.setEditText("Select Tags...")
+
+    def hidePopup(self):
+        self.update_display_text()
+        super().hidePopup()
+
+    def get_checked_items(self):
+        return self.checked_items
+
+
+class CustomSpinBoxGroup(QWidget):
+    """Enhanced macOS-style spin box group with emoji buttons."""
+
+    def __init__(self, label, theme_manager, min_value=1, max_value=100, initial_value=1, parent=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.label = QLabel(label)
+        layout.addWidget(self.label)
+
+        # Container for spinbox and buttons
+        controls_layout = QHBoxLayout()
+        controls_layout.setSpacing(4)
+
+        # Minus button with emoji
+        self.minus_btn = QPushButton("➖")
+        self.minus_btn.setFixedSize(28, 28)
+        controls_layout.addWidget(self.minus_btn)
+
+        self.spinbox = QSpinBox()
+        self.spinbox.setRange(min_value, max_value)
+        self.spinbox.setValue(initial_value)
+        controls_layout.addWidget(self.spinbox)
+
+        # Plus button with emoji
+        self.plus_btn = QPushButton("➕")
+        self.plus_btn.setFixedSize(28, 28)
+        controls_layout.addWidget(self.plus_btn)
+
+        layout.addLayout(controls_layout)
+
+        self.minus_btn.clicked.connect(self.decrease_value)
+        self.plus_btn.clicked.connect(self.increase_value)
+
+        self.update_theme()
+
+    def update_theme(self):
+        colors = self.theme_manager.get_colors()
+        self.label.setStyleSheet(f"font-size: 13px; color: {colors['text']};")
+
+        button_style = f"""
+            QPushButton {{
+                border-radius: 14px;
+                background: {colors['search_background']};
+                color: {colors['text']};
+                font-size: 16px;
+                margin: 0;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {colors['hover']};
+            }}
+        """
+        self.minus_btn.setStyleSheet(button_style)
+        self.plus_btn.setStyleSheet(button_style)
+
+        self.spinbox.setStyleSheet(f"""
+            QSpinBox {{
+                border: 0.5px solid {colors['border']};
+                border-radius: 6px;
+                padding: 4px;
+                background: {colors['card_background']};
+                color: {colors['text']};
+                min-height: 28px;
+                min-width: 60px;
+                font-size: 13px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                width: 0;
+            }}
+        """)
+
+    def decrease_value(self):
+        current = self.spinbox.value()
+        if current > self.spinbox.minimum():
+            self.spinbox.setValue(current - 1)
+
+    def increase_value(self):
+        current = self.spinbox.value()
+        if current < self.spinbox.maximum():
+            self.spinbox.setValue(current + 1)
+
+    def value(self):
+        return self.spinbox.value()
+
+    def setValue(self, value):
+        self.spinbox.setValue(value)
+
+
+class ModernDateEdit(QDateEdit):
+    """Enhanced macOS-style date edit with calendar popup."""
+
+    def __init__(self, theme_manager, parent=None):
+        super().__init__(parent)
+        self.theme_manager = theme_manager
+        self.setCalendarPopup(True)
+
+        # Calendar icon container with better proportions
+        self.calendar_container = QWidget(self)
+        self.calendar_container.setFixedSize(28, 28)
+
+        calendar_layout = QHBoxLayout(self.calendar_container)
+        calendar_layout.setContentsMargins(0, 0, 0, 0)
+        calendar_layout.setSpacing(0)
+
+        self.calendar_icon = QLabel()
+        self.calendar_icon.setText("📅")
+        self.calendar_icon.setAlignment(Qt.AlignCenter)
+        calendar_layout.addWidget(self.calendar_icon)
+
+        self.update_theme()
+
+    def update_theme(self):
+        colors = self.theme_manager.get_colors()
+        self.setStyleSheet(f"""
+            QDateEdit {{
+                border: 0.5px solid {colors['border']};
+                border-radius: 6px;
+                padding: 4px 30px 4px 10px;
+                background: {colors['card_background']};
+                color: {colors['text']};
+                min-height: 28px;
+                font-size: 13px;
+            }}
+            QCalendarWidget {{
+                background-color: {colors['card_background']};
+                color: {colors['text']};
+            }}
+            QCalendarWidget QToolButton {{
+                color: {colors['text']};
+            }}
+            QCalendarWidget QWidget {{
+                background-color: {colors['card_background']};
+                color: {colors['text']};
+            }}
+            QCalendarWidget QMenu {{
+                background-color: {colors['card_background']};
+                color: {colors['text']};
+            }}
+        """)
+
+        self.calendar_icon.setStyleSheet(f"color: {colors['secondary_text']};")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.calendar_container.move(
+            self.width() - self.calendar_container.width() - 5,
+            (self.height() - self.calendar_container.height()) // 2
+        )
+
+
+class MacPhaseFilterApp(QMainWindow):
+    """Main application window with enhanced macOS styling and dark mode support."""
+
+    def __init__(self):
+        super().__init__()
+        self.theme_manager = ThemeManager()
+        self.setWindowTitle("Phase Filter")
+        self.setGeometry(200, 100, 1200, 800)
+
+        # Add theme toggle button to toolbar
+        toolbar = QToolBar()
+        toolbar.setMovable(False)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+        # Theme toggle button
+        self.theme_action = toolbar.addAction("🌓")
+        self.theme_action.triggered.connect(self.toggle_theme)
+
+        self.selected_tags = set()
+        self.cached_results = None
+        self.initUI()
+        self.update_theme()
+
+    def toggle_theme(self):
+        self.theme_manager.toggle_theme()
+        self.update_theme()
+
+    def update_theme(self):
+        colors = self.theme_manager.get_colors()
+
+        # Update main window style
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background: {colors['background']};
+            }}
+            QToolBar {{
+                background: {colors['card_background']};
+                border: none;
+                spacing: 10px;
+                padding: 5px;
+            }}
+            QToolButton {{
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                color: {colors['text']};
+                padding: 5px;
+            }}
+            QPushButton {{
+                background: #007AFF;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 13px;
+                font-weight: 500;
+                min-height: 28px;
+            }}
+            QPushButton:hover {{
+                background: #0066DB;
+            }}
+            QTableWidget {{
+                border: none;
+                border-radius: 8px;
+                background: {colors['card_background']};
+                color: {colors['text']};
+                gridline-color: {colors['border']};
+                alternate-background-color: {colors['table_alternate']};
+            }}
+            QTableWidget::item {{
+                padding: 4px;
+                font-size: 13px;
+                color: {colors['text']};
+            }}
+            QHeaderView::section {{
+                background: {colors['table_header']};
+                color: {colors['text']};
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {colors['border']};
+            }}
+            QProgressBar {{
+                border: none;
+                border-radius: 3px;
+                background: {colors['progress_background']};
+                height: 6px;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background: {colors['progress_chunk']};
+                border-radius: 3px;
+            }}
+        """)
+
+        # Update child widgets
+        for widget in self.findChildren(QWidget):
+            if hasattr(widget, 'update_theme'):
+                widget.update_theme()
+
+    def initUI(self):
+        """Initialize the user interface with macOS styling."""
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
+        layout.setSpacing(20)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Top Section
+        top_section = QWidget()
+        top_layout = QHBoxLayout(top_section)
+        top_layout.setSpacing(15)
+
+        # Search bar with icon
+        self.search_bar = ModernSearchBar(self.theme_manager)
+        self.search_bar.setPlaceholderText("Search...")
+        top_layout.addWidget(self.search_bar, 1)
+
+        # Tags Selection
+        self.tag_dropdown = MacStyleComboBox(unique_tags, self.theme_manager)
+        top_layout.addWidget(self.tag_dropdown, 2)
+
+        layout.addWidget(top_section)
+
+        # Filters Section with macOS-style card look
+        filters_widget = QWidget()
+        filters_layout = QHBoxLayout(filters_widget)
+        filters_layout.setSpacing(30)
+
+        # Min/Max Tags
+        tags_layout = QVBoxLayout()
+        tags_layout.setSpacing(10)
+
+        self.min_tags_group = CustomSpinBoxGroup("Min Tags:", self.theme_manager, 1, 100, 1)
+        self.max_tags_group = CustomSpinBoxGroup("Max Tags:", self.theme_manager, 1, 100, 10)
+
+        self.min_tags_group.spinbox.valueChanged.connect(self.validate_min_max_tags)
+        self.max_tags_group.spinbox.valueChanged.connect(self.validate_min_max_tags)
+
+        tags_layout.addWidget(self.min_tags_group)
+        tags_layout.addWidget(self.max_tags_group)
+        filters_layout.addLayout(tags_layout)
+
+        # Date Range
+        dates_layout = QVBoxLayout()
+        dates_layout.setSpacing(10)
+
+        start_date_layout = QHBoxLayout()
+        start_date_label = QLabel("Start Date:")
+        start_date_layout.addWidget(start_date_label)
+        self.start_date = ModernDateEdit(self.theme_manager)
+        self.start_date.setDate(QDate(2022, 1, 1))
+        start_date_layout.addWidget(self.start_date)
+        dates_layout.addLayout(start_date_layout)
+
+        end_date_layout = QHBoxLayout()
+        end_date_label = QLabel("End Date:")
+        end_date_layout.addWidget(end_date_label)
+        self.end_date = ModernDateEdit(self.theme_manager)
+        self.end_date.setDate(QDate.currentDate())
+        end_date_layout.addWidget(self.end_date)
+        dates_layout.addLayout(end_date_layout)
+
+        filters_layout.addLayout(dates_layout)
+
+        # Action Buttons
+        buttons_layout = QVBoxLayout()
+        buttons_layout.setSpacing(10)
+
+        self.search_button = QPushButton("Search")
+        self.search_button.clicked.connect(self.search_events)
+        buttons_layout.addWidget(self.search_button)
+
+        self.save_button = QPushButton("Save Results")
+        self.save_button.setStyleSheet("""
+            QPushButton {
+                background: #34C759;
+            }
+            QPushButton:hover {
+                background: #30B552;
+            }
+        """)
+        self.save_button.clicked.connect(self.save_results)
+        buttons_layout.addWidget(self.save_button)
+
+        filters_layout.addLayout(buttons_layout)
+        layout.addWidget(filters_widget)
+
+        # Progress Bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
+        # Results Table
+        self.results_table = QTableWidget(0, 5)
+        self.results_table.setHorizontalHeaderLabels(["Run Name", "Patch", "Phase", "Tags", "RSD"])
+        self.results_table.horizontalHeader().setStretchLastSection(True)
+        self.results_table.setShowGrid(True)
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.cellClicked.connect(self.display_visualization)
+        layout.addWidget(self.results_table)
+
+        # Visualization Area
+        self.graphics_view = QGraphicsView()
+        self.graphics_scene = QGraphicsScene()
+        self.graphics_view.setScene(self.graphics_scene)
+        self.graphics_view.setMinimumHeight(200)
+        layout.addWidget(self.graphics_view)
+
+    def validate_min_max_tags(self):
+        """Ensure min_tags doesn't exceed max_tags and vice versa."""
+        min_val = self.min_tags_group.value()
+        max_val = self.max_tags_group.value()
+
+        if min_val > max_val:
+            if self.sender() == self.min_tags_group.spinbox:
+                self.max_tags_group.setValue(min_val)
+            else:
+                self.min_tags_group.setValue(max_val)
+
+    def search_events(self):
+        """Search events based on filters and selected tags with progress indication."""
+        min_tags = self.min_tags_group.value()
+        max_tags = self.max_tags_group.value()
+        selected_tags = self.tag_dropdown.get_checked_items()
+        search_text = self.search_bar.text().lower()
+
+        results = []
+        total_events = sum(len(run_data["patches"]) for run_data in events.values())
+        processed_events = 0
+
+        for run_name, run_data in events.items():
+            if search_text and search_text not in run_name.lower():
+                continue
+
+            for patch_idx, patch in enumerate(run_data["patches"], start=1):
+                for phase_idx, phase in enumerate(patch["phases"], start=1):
+                    phase_tags = set(phase.get("phase_tags", []))
+                    num_tags = len(phase_tags)
+
+                    if not (min_tags <= num_tags <= max_tags):
+                        continue
+
+                    if selected_tags and not selected_tags.issubset(phase_tags):
+                        continue
+
+                    if search_text and not any(search_text in tag.lower() for tag in phase_tags):
+                        continue
+
+                    results.append({
+                        "Run Name": run_name,
+                        "Patch": patch_idx,
+                        "Phase": phase_idx,
+                        "Tags": ", ".join(phase_tags),
+                        "RSD": phase.get("end_phase_rsd_index", 0) - phase.get("start_phase_rsd_index", 0),
+                    })
+
+                processed_events += 1
+                self.progress_bar.setValue(int((processed_events / total_events) * 100))
+
+        self.cached_results = results
+        self.display_results(results)
+        self.progress_bar.setValue(100)
+
+    def display_results(self, results):
+        """Display search results in the table with macOS-style formatting."""
+        self.results_table.setRowCount(len(results))
+        for row_idx, result in enumerate(results):
+            for col_idx, (key, value) in enumerate(result.items()):
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                self.results_table.setItem(row_idx, col_idx, item)
+
+        self.results_table.resizeColumnsToContents()
+
+    def display_visualization(self, row, column):
+        """Display a modern visual representation of the selected patch's phases."""
+        selected_run_name = self.results_table.item(row, 0).text()
+        selected_patch_idx = int(self.results_table.item(row, 1).text())
+
+        if not selected_run_name or selected_run_name not in events:
+            return
+
+        selected_run_data = events[selected_run_name]
+        if selected_patch_idx > len(selected_run_data["patches"]):
+            return
+
+        selected_patch = selected_run_data["patches"][selected_patch_idx - 1]
+
+        # Clear and setup the scene
+        self.graphics_scene.clear()
+
+        # Modern visualization settings
+        total_width = self.graphics_view.width() - 40
+        bar_height = 30
+        spacing = 8
+        y_position = 10
+
+        # Calculate total RSD for proportions
+        total_rsd = sum(
+            phase.get("end_phase_rsd_index", 0) - phase.get("start_phase_rsd_index", 0)
+            for phase in selected_patch["phases"]
+        )
+
+        # Modern macOS color palette
+        colors = [
+            QColor("#007AFF"),  # Blue
+            QColor("#34C759"),  # Green
+            QColor("#FF9F0A"),  # Orange
+            QColor("#FF3B30"),  # Red
+            QColor("#5856D6"),  # Purple
+            QColor("#FF2D55"),  # Pink
+            QColor("#64D2FF"),  # Light Blue
+            QColor("#FFD60A"),  # Yellow
+        ]
+
+        # Apply theme-specific adjustments
+        colors_style = self.theme_manager.get_colors()
+        text_color = QColor(colors_style['text'])
+
+        x_position = 0
+        for idx, phase in enumerate(selected_patch["phases"]):
+            rsd_length = phase.get("end_phase_rsd_index", 0) - phase.get("start_phase_rsd_index", 0)
+            width = (rsd_length / total_rsd) * total_width if total_rsd else total_width / len(selected_patch["phases"])
+
+            # Create gradient for modern look
+            gradient = QLinearGradient(x_position, y_position, x_position, y_position + bar_height)
+            base_color = colors[idx % len(colors)]
+            gradient.setColorAt(0, base_color.lighter(120))
+            gradient.setColorAt(1, base_color)
+
+            # Add rounded rectangle for phase
+            rect = self.graphics_scene.addRect(
+                float(x_position), float(y_position), float(width), float(bar_height),
+                QPen(Qt.NoPen),
+                QBrush(gradient)
+            )
+
+            # Add tags with modern styling
+            tags = phase.get("phase_tags", [])
+            tag_y = y_position + bar_height + spacing
+            for tag in tags:
+                tag_text = self.graphics_scene.addText(tag)
+                tag_text.setDefaultTextColor(text_color)
+                font = QFont("SF Pro", 11)
+                tag_text.setFont(font)
+                tag_text.setPos(x_position, tag_y)
+                tag_y += 15
+
+            x_position += width + spacing
+
+        # Adjust view
+        self.graphics_scene.setSceneRect(self.graphics_scene.itemsBoundingRect())
+        self.graphics_view.fitInView(self.graphics_scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def save_results(self):
+        """Save results to Excel with modern macOS-style dialog."""
+        if not self.cached_results:
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Results",
+            os.path.expanduser("~/Documents"),
+            "Excel Files (*.xlsx)"
+        )
+
+        if file_path:
+            if not file_path.endswith(".xlsx"):
+                file_path += ".xlsx"
+
+            try:
+                df = pd.DataFrame(self.cached_results)
+                df.to_excel(file_path, index=False, engine="openpyxl")
+            except Exception as e:
+                print(f"Error saving file: {str(e)}")
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+
+    # Set system-wide font to SF Pro
+    font = QFont("SF Pro", 13)
+    app.setFont(font)
+
+    # Enable native macOS features
+    app.setAttribute(Qt.AA_MacDontSwapCtrlAndMeta)
+
+    window = MacPhaseFilterApp()
+    window.show()
+    sys.exit(app.exec_())
